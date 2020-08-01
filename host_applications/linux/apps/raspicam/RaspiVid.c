@@ -90,6 +90,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <stdbool.h>
 
+#define MAX_WITRE_BUFFER_SIZE 1400
+
 // Standard port setting for the camera component
 #define MMAL_CAMERA_PREVIEW_PORT 0
 #define MMAL_CAMERA_VIDEO_PORT 1
@@ -969,6 +971,8 @@ static FILE *open_filename(RASPIVID_STATE *pState, char *filename)
 {
    FILE *new_handle = NULL;
    char *tempname = NULL;
+   struct sockaddr_in client;
+   unsigned int sockaddr_len;
 
    if (pState->segmentSize || pState->splitWait)
    {
@@ -1014,11 +1018,13 @@ static FILE *open_filename(RASPIVID_STATE *pState, char *filename)
       }
       else if(!strncmp("udp://", filename, 6))
       {
+        /*
          if (pState->netListen)
          {
             fprintf(stderr, "No support for listening in UDP mode\n");
             exit(131);
          }
+         */
          bNetwork = true;
          socktype = SOCK_DGRAM;
       }
@@ -1055,7 +1061,7 @@ static FILE *open_filename(RASPIVID_STATE *pState, char *filename)
          }
          *colon = chTmp;
 
-         if (pState->netListen)
+         if (pState->netListen && socktype == SOCK_STREAM)
          {
             int sockListen = socket(AF_INET, SOCK_STREAM, 0);
             if (sockListen >= 0)
@@ -1096,6 +1102,32 @@ static FILE *open_filename(RASPIVID_STATE *pState, char *filename)
 
             if (sockListen >= 0)//regardless success or error
                close(sockListen);//do not listen on a given port anymore
+         }
+         else if (pState->netListen && socktype == SOCK_DGRAM)
+         {
+            int sockListen = socket(AF_INET, SOCK_DGRAM, 0);
+            if (sockListen >= 0)
+            {
+              if (bind(sockListen, (struct sockaddr *) &saddr, sizeof(saddr)) >= 0)
+                {
+                  fprintf(stderr, "Waiting for a UDP connection on %s:%"SCNu16"...\n", inet_ntoa(saddr.sin_addr), ntohs(saddr.sin_port));
+                  char hello_message[32];
+                  sockaddr_len = sizeof(client);
+                  if(recvfrom(sockListen, hello_message, sizeof(hello_message), 0, (struct sockaddr *) &client, &sockaddr_len) < 0)
+                  {
+                      fprintf(stderr, "Error receiving message: %s\n", strerror(errno));
+                  }
+                  printf("Received message %s from %s:%"SCNu16"\n", hello_message, inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+                  connect(sockListen, (struct sockaddr *) &client, sizeof(struct sockaddr_in));
+                  sfd = sockListen;
+              } else {
+                fprintf(stderr, "Error creating socket: %s\n", strerror(errno));
+              }
+            }
+            else//if (sockListen >= 0)
+            {
+               fprintf(stderr, "Error creating socket: %s\n", strerror(errno));
+            }
          }
          else//if (pState->netListen)
          {
@@ -1375,6 +1407,21 @@ static void encoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
             }
             else
             {
+               // Write the buffer to the file or socket
+               // printf("buffer %zu bytes\n", buffer->length);
+               /*
+               // Chunked write for UDP
+               bytes_written = 0;
+               while(bytes_written < buffer->length) {
+                 int chunk_size = buffer->length - bytes_written;
+                 if (chunk_size > MAX_WITRE_BUFFER_SIZE) {
+                   chunk_size = MAX_WITRE_BUFFER_SIZE;
+                 }
+                 //printf("buffer %zu bytes at %zu\n", chunk_size, bytes_written > 0 ? bytes_written / MAX_WITRE_BUFFER_SIZE : 0);
+                 // TODO: fix fwrite return < chunk_size
+                 bytes_written += fwrite(&buffer->data[bytes_written], 1, chunk_size, pData->file_handle);
+               }
+               */
                bytes_written = fwrite(buffer->data, 1, buffer->length, pData->file_handle);
                if(pData->flush_buffers)
                {
